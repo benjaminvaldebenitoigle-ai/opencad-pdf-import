@@ -1,16 +1,20 @@
 # PDF a CAD para Open CAD Studio 2026.36
 
 Complemento nativo que importa trazados vectoriales PDF en el dibujo activo de
-Open CAD Studio como entidades `LWPOLYLINE` editables.
+Open CAD Studio como entidades `LINE` y `LWPOLYLINE` editables.
 
 ## Funciones
 
-- selector de PDF integrado en la cinta **PDF a CAD**;
+- vista previa ligera integrada en el dibujo antes de insertar;
+- rotación de la vista previa en pasos de 90° a izquierda o derecha;
+- confirmación o cancelación sin dejar geometría temporal;
 - escala física correcta: 72 puntos PDF = 25,4 mm;
 - líneas, polilíneas, rectángulos y contornos cerrados;
 - curvas Bézier aproximadas con 12 segmentos;
 - formularios PDF vectoriales (`Form XObject`) y documentos de varias páginas;
 - una única operación de deshacer para toda la importación;
+- optimización geométrica conservadora: elimina duplicados exactos, une
+  trazados por extremos idénticos y usa entidades `LINE` para segmentos simples;
 - diagnóstico para PDF cifrado o sin geometría vectorial.
 
 Las páginas se colocan de izquierda a derecha con 10 mm de separación. El texto
@@ -48,8 +52,17 @@ verifica el compilador exacto y crea el ZIP instalable dentro de `dist`.
 1. Cree `%APPDATA%\OpenCADStudio\plugins\opencad.pdf_import\`.
 2. Copie allí `plugin.toml` y `opencad.pdf_import-windows-x86_64.dll`.
 3. Reinicie Open CAD Studio.
-4. Abra un dibujo nuevo o existente y use **PDF a CAD > Importar PDF**.
-5. Guarde el dibujo como DXF o DWG desde Open CAD Studio.
+4. Abra un dibujo nuevo o existente y use **PDF a CAD > Vista previa**.
+5. Pulse **Ajustar vista** si el plano no cabe en pantalla y use **Girar
+   izquierda** o **Girar derecha** hasta obtener la orientación deseada.
+6. Pulse **Insertar plano** para confirmar, o **Cancelar** para retirar la vista
+   previa.
+7. Guarde el dibujo como DXF o DWG desde Open CAD Studio.
+
+La vista previa muestra una muestra representativa limitada a 240 entidades,
+para que incluso los planos muy densos puedan rotarse con fluidez. Al confirmar
+se inserta la geometría vectorial completa optimizada, sin reducir la precisión
+de sus coordenadas.
 
 ## Pruebas
 

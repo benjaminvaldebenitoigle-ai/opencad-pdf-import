@@ -1,16 +1,20 @@
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use lopdf::{content::Content, Dictionary, Document, Object, Stream};
-use ocs_plugin_api::host::acadrust::{EntityType, LwPolyline, Vector2};
+use ocs_plugin_api::host::acadrust::{EntityType, Line, LwPolyline, Vector2, Vector3};
 
 pub const POINT_TO_MM: f64 = 25.4 / 72.0;
 const PAGE_GAP_MM: f64 = 10.0;
 const CURVE_STEPS: usize = 12;
+const PREVIEW_ENTITY_LIMIT: usize = 240;
 
 #[derive(Debug)]
 pub struct ImportResult {
     pub entities: Vec<EntityType>,
     pub pages: usize,
+    pub source_paths: usize,
+    pub vertices: usize,
     pub text_operators: usize,
     pub image_operators: usize,
 }
@@ -82,7 +86,7 @@ struct PageState {
     stack: Vec<Matrix>,
     paths: Vec<Subpath>,
     current: Option<usize>,
-    entities: Vec<EntityType>,
+    painted_paths: Vec<Subpath>,
     text_operators: usize,
     image_operators: usize,
 }
@@ -99,7 +103,7 @@ impl PageState {
             stack: Vec::new(),
             paths: Vec::new(),
             current: None,
-            entities: Vec::new(),
+            painted_paths: Vec::new(),
             text_operators: 0,
             image_operators: 0,
         }
@@ -175,19 +179,7 @@ impl PageState {
         if close {
             self.close();
         }
-        for path in self.paths.drain(..) {
-            if path.points.len() < 2 {
-                continue;
-            }
-            let mut polyline = LwPolyline::from_points(
-                path.points
-                    .into_iter()
-                    .map(|p| Vector2::new(p.x, p.y))
-                    .collect(),
-            );
-            polyline.is_closed = path.closed;
-            self.entities.push(EntityType::LwPolyline(polyline));
-        }
+        self.painted_paths.append(&mut self.paths);
         self.current = None;
     }
 
@@ -205,6 +197,8 @@ pub fn read_pdf(path: &Path) -> Result<ImportResult, String> {
 
     let pages = document.get_pages();
     let mut all_entities = Vec::new();
+    let mut source_paths = 0;
+    let mut vertices = 0;
     let mut text_operators = 0;
     let mut image_operators = 0;
     let mut page_offset_x = 0.0;
@@ -232,19 +226,322 @@ pub fn read_pdf(path: &Path) -> Result<ImportResult, String> {
         process_operations(&document, &content, &resources, &mut state, 0)?;
         state.paint(false);
 
+        source_paths += state.painted_paths.len();
+        let page_entities = paths_to_entities(optimize_paths(state.painted_paths));
+        vertices += page_entities.iter().map(entity_vertex_count).sum::<usize>();
+
         let page_width = page_width_points(&document, *page_id).unwrap_or(612.0) * POINT_TO_MM;
         page_offset_x += page_width + PAGE_GAP_MM;
         text_operators += state.text_operators;
         image_operators += state.image_operators;
-        all_entities.extend(state.entities);
+        all_entities.extend(page_entities);
     }
 
     Ok(ImportResult {
         entities: all_entities,
         pages: pages.len(),
+        source_paths,
+        vertices,
         text_operators,
         image_operators,
     })
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct PointKey(u64, u64);
+
+impl From<Point> for PointKey {
+    fn from(point: Point) -> Self {
+        fn canonical_bits(value: f64) -> u64 {
+            if value == 0.0 {
+                0
+            } else {
+                value.to_bits()
+            }
+        }
+        Self(canonical_bits(point.x), canonical_bits(point.y))
+    }
+}
+
+fn optimize_paths(paths: Vec<Subpath>) -> Vec<Subpath> {
+    let mut unique_segments = HashSet::new();
+    let mut closed = Vec::new();
+    let mut open = Vec::new();
+
+    for mut path in paths {
+        path.points
+            .dedup_by(|left, right| PointKey::from(*left) == PointKey::from(*right));
+        if path.closed
+            && path.points.len() > 2
+            && PointKey::from(path.points[0]) == PointKey::from(*path.points.last().unwrap())
+        {
+            path.points.pop();
+        }
+        if path.points.len() < 2
+            || path
+                .points
+                .iter()
+                .any(|p| !p.x.is_finite() || !p.y.is_finite())
+        {
+            continue;
+        }
+        if path.closed {
+            closed.push(path);
+            continue;
+        }
+        if PointKey::from(path.points[0]) == PointKey::from(*path.points.last().unwrap()) {
+            path.points.pop();
+            path.closed = path.points.len() > 2;
+            if path.closed {
+                closed.push(path);
+            }
+            continue;
+        }
+        if path.points.len() == 2 {
+            let a = PointKey::from(path.points[0]);
+            let b = PointKey::from(path.points[1]);
+            let key = if a <= b { (a, b) } else { (b, a) };
+            if !unique_segments.insert(key) {
+                continue;
+            }
+        }
+        open.push(path);
+    }
+
+    let mut adjacency = HashMap::<PointKey, Vec<usize>>::new();
+    for (index, path) in open.iter().enumerate() {
+        adjacency
+            .entry(PointKey::from(path.points[0]))
+            .or_default()
+            .push(index);
+        adjacency
+            .entry(PointKey::from(*path.points.last().unwrap()))
+            .or_default()
+            .push(index);
+    }
+
+    let mut slots: Vec<Option<Subpath>> = open.into_iter().map(Some).collect();
+    let mut joined = Vec::new();
+    for index in 0..slots.len() {
+        let Some(path) = slots[index].as_ref() else {
+            continue;
+        };
+        let start_degree = adjacency
+            .get(&PointKey::from(path.points[0]))
+            .map_or(0, Vec::len);
+        let end_degree = adjacency
+            .get(&PointKey::from(*path.points.last().unwrap()))
+            .map_or(0, Vec::len);
+        if start_degree != 2 || end_degree != 2 {
+            let reverse = start_degree == 2 && end_degree != 2;
+            joined.push(build_chain(index, reverse, &mut slots, &adjacency));
+        }
+    }
+    for index in 0..slots.len() {
+        if slots[index].is_some() {
+            joined.push(build_chain(index, false, &mut slots, &adjacency));
+        }
+    }
+    closed.extend(joined);
+    closed
+}
+
+fn build_chain(
+    index: usize,
+    reverse: bool,
+    paths: &mut [Option<Subpath>],
+    adjacency: &HashMap<PointKey, Vec<usize>>,
+) -> Subpath {
+    let mut path = paths[index].take().unwrap();
+    if reverse {
+        path.points.reverse();
+    }
+    let first = PointKey::from(path.points[0]);
+
+    loop {
+        let end = PointKey::from(*path.points.last().unwrap());
+        if end == first && path.points.len() > 2 {
+            path.points.pop();
+            path.closed = true;
+            break;
+        }
+        let Some(neighbours) = adjacency.get(&end).filter(|items| items.len() == 2) else {
+            break;
+        };
+        let Some(next_index) = neighbours.iter().copied().find(|i| paths[*i].is_some()) else {
+            break;
+        };
+        let mut next = paths[next_index].take().unwrap();
+        if PointKey::from(next.points[0]) != end {
+            next.points.reverse();
+        }
+        if PointKey::from(next.points[0]) != end {
+            paths[next_index] = Some(next);
+            break;
+        }
+        path.points.extend(next.points.into_iter().skip(1));
+    }
+    path
+}
+
+fn paths_to_entities(paths: Vec<Subpath>) -> Vec<EntityType> {
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            if path.points.len() < 2 {
+                return None;
+            }
+            if !path.closed && path.points.len() == 2 {
+                let start = path.points[0];
+                let end = path.points[1];
+                return Some(EntityType::Line(Line::from_points(
+                    Vector3::new(start.x, start.y, 0.0),
+                    Vector3::new(end.x, end.y, 0.0),
+                )));
+            }
+            let mut polyline = LwPolyline::from_points(
+                path.points
+                    .into_iter()
+                    .map(|p| Vector2::new(p.x, p.y))
+                    .collect(),
+            );
+            polyline.is_closed = path.closed;
+            Some(EntityType::LwPolyline(polyline))
+        })
+        .collect()
+}
+
+pub fn preview_entities(entities: &[EntityType], quarter_turns: u8) -> Vec<EntityType> {
+    if entities.is_empty() {
+        return Vec::new();
+    }
+    let half = PREVIEW_ENTITY_LIMIT / 2;
+    let mut ranked: Vec<_> = entities
+        .iter()
+        .enumerate()
+        .map(|(index, entity)| (index, entity_span_squared(entity)))
+        .collect();
+    ranked.sort_unstable_by(|left, right| right.1.total_cmp(&left.1));
+    let mut indices: Vec<_> = ranked.into_iter().take(half).map(|item| item.0).collect();
+    let step = entities.len().div_ceil(half).max(1);
+    indices.extend((0..entities.len()).step_by(step).take(half));
+    indices.sort_unstable();
+    indices.dedup();
+    let mut sampled: Vec<_> = indices
+        .into_iter()
+        .map(|index| entities[index].clone())
+        .collect();
+    if let Some((min, max)) = entity_bounds(entities) {
+        rotate_entities_around(&mut sampled, min, max, quarter_turns);
+    }
+    sampled
+}
+
+fn entity_span_squared(entity: &EntityType) -> f64 {
+    match entity {
+        EntityType::Line(line) => {
+            let dx = line.end.x - line.start.x;
+            let dy = line.end.y - line.start.y;
+            dx * dx + dy * dy
+        }
+        EntityType::LwPolyline(polyline) => {
+            let mut min = Vector2::new(f64::INFINITY, f64::INFINITY);
+            let mut max = Vector2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for vertex in &polyline.vertices {
+                min.x = min.x.min(vertex.location.x);
+                min.y = min.y.min(vertex.location.y);
+                max.x = max.x.max(vertex.location.x);
+                max.y = max.y.max(vertex.location.y);
+            }
+            let dx = max.x - min.x;
+            let dy = max.y - min.y;
+            dx * dx + dy * dy
+        }
+        _ => 0.0,
+    }
+}
+
+pub fn rotated_entities(mut entities: Vec<EntityType>, quarter_turns: u8) -> Vec<EntityType> {
+    let Some((min, max)) = entity_bounds(&entities) else {
+        return entities;
+    };
+    rotate_entities_around(&mut entities, min, max, quarter_turns);
+    entities
+}
+
+fn rotate_entities_around(
+    entities: &mut [EntityType],
+    min: Vector2,
+    max: Vector2,
+    quarter_turns: u8,
+) {
+    let center = Vector2::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5);
+    for entity in entities {
+        match entity {
+            EntityType::Line(line) => {
+                rotate_xy(&mut line.start.x, &mut line.start.y, center, quarter_turns);
+                rotate_xy(&mut line.end.x, &mut line.end.y, center, quarter_turns);
+            }
+            EntityType::LwPolyline(polyline) => {
+                for vertex in &mut polyline.vertices {
+                    rotate_xy(
+                        &mut vertex.location.x,
+                        &mut vertex.location.y,
+                        center,
+                        quarter_turns,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn rotate_xy(x: &mut f64, y: &mut f64, center: Vector2, quarter_turns: u8) {
+    let dx = *x - center.x;
+    let dy = *y - center.y;
+    (*x, *y) = match quarter_turns % 4 {
+        1 => (center.x + dy, center.y - dx),
+        2 => (center.x - dx, center.y - dy),
+        3 => (center.x - dy, center.y + dx),
+        _ => (*x, *y),
+    };
+}
+
+fn entity_bounds(entities: &[EntityType]) -> Option<(Vector2, Vector2)> {
+    let mut min = Vector2::new(f64::INFINITY, f64::INFINITY);
+    let mut max = Vector2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
+    let mut found = false;
+    let mut include = |x: f64, y: f64| {
+        min.x = min.x.min(x);
+        min.y = min.y.min(y);
+        max.x = max.x.max(x);
+        max.y = max.y.max(y);
+        found = true;
+    };
+    for entity in entities {
+        match entity {
+            EntityType::Line(line) => {
+                include(line.start.x, line.start.y);
+                include(line.end.x, line.end.y);
+            }
+            EntityType::LwPolyline(polyline) => {
+                for vertex in &polyline.vertices {
+                    include(vertex.location.x, vertex.location.y);
+                }
+            }
+            _ => {}
+        }
+    }
+    found.then_some((min, max))
+}
+
+pub fn entity_vertex_count(entity: &EntityType) -> usize {
+    match entity {
+        EntityType::Line(_) => 2,
+        EntityType::LwPolyline(polyline) => polyline.vertices.len(),
+        _ => 0,
+    }
 }
 
 fn process_operations(
@@ -482,8 +779,9 @@ mod tests {
         let mut state = PageState::new(0.0);
         state.rectangle(0.0, 0.0, 10.0, 20.0);
         state.paint(false);
-        assert_eq!(state.entities.len(), 1);
-        match &state.entities[0] {
+        let entities = paths_to_entities(optimize_paths(state.painted_paths));
+        assert_eq!(entities.len(), 1);
+        match &entities[0] {
             EntityType::LwPolyline(polyline) => {
                 assert!(polyline.is_closed);
                 assert_eq!(polyline.vertices.len(), 4);
@@ -551,11 +849,10 @@ mod tests {
         assert_eq!(result.pages, 1);
         assert_eq!(result.entities.len(), 1);
         match &result.entities[0] {
-            EntityType::LwPolyline(polyline) => {
-                assert_eq!(polyline.vertices.len(), 2);
-                assert!((polyline.vertices[1].location.x - 25.4).abs() < 1e-9);
+            EntityType::Line(line) => {
+                assert!((line.end.x - 25.4).abs() < 1e-9);
             }
-            _ => panic!("expected lightweight polyline"),
+            _ => panic!("expected line"),
         }
     }
 
@@ -588,13 +885,111 @@ mod tests {
         process_operations(&document, &page_content, &[&resources], &mut state, 0)
             .expect("process form");
 
-        assert_eq!(state.entities.len(), 1);
-        match &state.entities[0] {
-            EntityType::LwPolyline(polyline) => {
-                assert!((polyline.vertices[0].location.x - 5.0 * POINT_TO_MM).abs() < 1e-9);
-                assert!((polyline.vertices[1].location.x - 25.0 * POINT_TO_MM).abs() < 1e-9);
+        let entities = paths_to_entities(optimize_paths(state.painted_paths));
+        assert_eq!(entities.len(), 1);
+        match &entities[0] {
+            EntityType::Line(line) => {
+                assert!((line.start.x - 5.0 * POINT_TO_MM).abs() < 1e-9);
+                assert!((line.end.x - 25.0 * POINT_TO_MM).abs() < 1e-9);
             }
-            _ => panic!("expected lightweight polyline"),
+            _ => panic!("expected line"),
+        }
+    }
+
+    #[test]
+    fn joins_exactly_connected_paths_without_changing_points() {
+        let paths = vec![
+            Subpath {
+                points: vec![Point { x: 0.0, y: 0.0 }, Point { x: 1.0, y: 0.0 }],
+                closed: false,
+            },
+            Subpath {
+                points: vec![Point { x: 2.0, y: 0.0 }, Point { x: 1.0, y: 0.0 }],
+                closed: false,
+            },
+        ];
+        let optimized = optimize_paths(paths);
+        assert_eq!(optimized.len(), 1);
+        assert_eq!(
+            optimized[0].points,
+            vec![
+                Point { x: 0.0, y: 0.0 },
+                Point { x: 1.0, y: 0.0 },
+                Point { x: 2.0, y: 0.0 }
+            ]
+        );
+    }
+
+    #[test]
+    fn quarter_turn_rotation_preserves_distances() {
+        let entities = vec![EntityType::Line(Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(20.0, 10.0, 0.0),
+        ))];
+        let rotated = rotated_entities(entities, 1);
+        let EntityType::Line(line) = &rotated[0] else {
+            panic!("expected line");
+        };
+        assert!((line.start.distance(&line.end) - 500.0_f64.sqrt()).abs() < 1e-9);
+        assert!((line.start.x - 5.0).abs() < 1e-9);
+        assert!((line.start.y - 15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn dense_preview_is_bounded() {
+        let entities: Vec<_> = (0..1_000)
+            .map(|index| {
+                EntityType::Line(Line::from_points(
+                    Vector3::new(index as f64, 0.0, 0.0),
+                    Vector3::new(index as f64, index as f64 + 1.0, 0.0),
+                ))
+            })
+            .collect();
+        let preview = preview_entities(&entities, 1);
+        assert!(preview.len() <= PREVIEW_ENTITY_LIMIT);
+        assert!(preview.len() >= 200);
+    }
+
+    #[test]
+    #[ignore = "manual diagnostic for a user-supplied PDF"]
+    fn diagnostic_real_pdf_complexity() {
+        let path = std::env::var_os("PDF_IMPORT_DIAGNOSTIC")
+            .map(std::path::PathBuf::from)
+            .expect("set PDF_IMPORT_DIAGNOSTIC");
+        let mut files = if path.is_dir() {
+            std::fs::read_dir(&path)
+                .expect("read diagnostic directory")
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+                })
+                .collect::<Vec<_>>()
+        } else {
+            vec![path]
+        };
+        files.sort();
+        for file in files {
+            let started = std::time::Instant::now();
+            let result = read_pdf(&file).expect("read diagnostic PDF");
+            let lines = result
+                .entities
+                .iter()
+                .filter(|entity| matches!(entity, EntityType::Line(_)))
+                .count();
+            let polylines = result.entities.len() - lines;
+            eprintln!(
+                "{}: source_paths={} entities={} lines={} polylines={} vertices={} pages={} elapsed_ms={}",
+                file.file_name().unwrap().to_string_lossy(),
+                result.source_paths,
+                result.entities.len(),
+                lines,
+                polylines,
+                result.vertices,
+                result.pages,
+                started.elapsed().as_millis(),
+            );
         }
     }
 }
