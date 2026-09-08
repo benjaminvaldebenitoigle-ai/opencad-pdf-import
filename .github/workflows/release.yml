@@ -1,0 +1,46 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            source: libopencad_pdf_import.so
+            asset: opencad.pdf_import-linux-x86_64.so
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            source: opencad_pdf_import.dll
+            asset: opencad.pdf_import-windows-x86_64.dll
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            source: libopencad_pdf_import.dylib
+            asset: opencad.pdf_import-macos-aarch64.dylib
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Stage release asset
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.source }}" "dist/${{ matrix.asset }}"
+          cp plugin.toml dist/plugin.toml
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/${{ matrix.asset }}
+            dist/plugin.toml

@@ -1,0 +1,15 @@
+[plugin]
+id = "opencad.pdf_import"
+name = "PDF a CAD"
+version = "0.1.0"
+description = "Importa geometria vectorial de un PDF al dibujo CAD activo"
+author = "Open CAD Studio community plugin"
+license = "GPL-3.0-only"
+
+[opencad]
+api_version = 6
+ribbon_order = 45
+command_prefixes = ["PDFCAD_"]
+xdata_apps = []
+acadrust_source = "git+https://git@github.com/HakanSeven12/cadcodec.git?rev=5b56571a190e7a17c8f12d36390d2938b0fb72f7#5b56571a190e7a17c8f12d36390d2938b0fb72f7"
+rustc_version = "rustc 1.98.1 (48a229cea 2026-09-01)"

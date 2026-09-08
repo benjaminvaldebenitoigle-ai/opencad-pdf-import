@@ -1,0 +1,16 @@
+[package]
+name = "opencad-pdf-import"
+version = "0.1.0"
+edition = "2021"
+description = "Import vector PDF drawings into Open CAD Studio 2026.36"
+license = "GPL-3.0-only"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+lopdf = "0.38"
+ocs_plugin_api = { git = "https://github.com/HakanSeven12/OpenCADStudio", rev = "a754fac6d43d181cb424f179ef122988a94a956d", features = ["host"] }
+
+[patch."https://github.com/HakanSeven12/cadcodec.git"]
+acadrust = { git = "https://git@github.com/HakanSeven12/cadcodec.git", rev = "5b56571a190e7a17c8f12d36390d2938b0fb72f7" }
