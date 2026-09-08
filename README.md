@@ -19,8 +19,9 @@ escaneado debe vectorizarse antes de importarlo.
 
 ## Compatibilidad
 
-Este código está fijado a Open CAD Studio `2026.36.0`, commit
-`a754fac6d43d181cb424f179ef122988a94a956d`, API de complementos 6 y cadcodec
+Este código está fijado al commit usado para compilar la versión oficial de
+Open CAD Studio `2026.36`,
+`afbf826b0cf5bca44acf61a05be278cd673d7d39`, API de complementos 5 y cadcodec
 `5b56571a190e7a17c8f12d36390d2938b0fb72f7`.
 
 Los complementos nativos deben compilarse con la misma versión exacta de Rust

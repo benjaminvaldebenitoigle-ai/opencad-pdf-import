@@ -934,7 +934,7 @@ dependencies = [
 [[package]]
 name = "ocs_plugin_api"
 version = "0.2.1"
-source = "git+https://github.com/HakanSeven12/OpenCADStudio?rev=a754fac6d43d181cb424f179ef122988a94a956d#a754fac6d43d181cb424f179ef122988a94a956d"
+source = "git+https://github.com/HakanSeven12/OpenCADStudio?rev=afbf826b0cf5bca44acf61a05be278cd673d7d39#afbf826b0cf5bca44acf61a05be278cd673d7d39"
 dependencies = [
  "acadrust",
  "bincode",
@@ -946,7 +946,6 @@ dependencies = [
  "rkyv",
  "serde",
  "serde-reflection",
- "serde_bytes",
  "serde_json",
  "thiserror 1.0.69",
 ]
@@ -959,7 +958,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "opencad-pdf-import"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "lopdf",
  "ocs_plugin_api",
@@ -1221,16 +1220,6 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "typeid",
-]
-
-[[package]]
-name = "serde_bytes"
-version = "0.11.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
-dependencies = [
- "serde",
- "serde_core",
 ]
 
 [[package]]
