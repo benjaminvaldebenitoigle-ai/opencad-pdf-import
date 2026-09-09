@@ -273,7 +273,13 @@ fn paths_to_entities(paths: Vec<Subpath>) -> Vec<EntityType> {
         .collect()
 }
 
-pub fn preview_entities(entities: &[EntityType], quarter_turns: u8) -> Vec<EntityType> {
+pub fn preview_entities(
+    entities: &[EntityType],
+    quarter_turns: u8,
+    scale: f64,
+    offset_x: f64,
+    offset_y: f64,
+) -> Vec<EntityType> {
     if entities.is_empty() {
         return Vec::new();
     }
@@ -294,7 +300,15 @@ pub fn preview_entities(entities: &[EntityType], quarter_turns: u8) -> Vec<Entit
         .map(|index| entities[index].clone())
         .collect();
     if let Some((min, max)) = entity_bounds(entities) {
-        rotate_entities_around(&mut sampled, min, max, quarter_turns);
+        transform_entities_around(
+            &mut sampled,
+            min,
+            max,
+            quarter_turns,
+            scale,
+            offset_x,
+            offset_y,
+        );
     }
     sampled
 }
@@ -323,34 +337,70 @@ fn entity_span_squared(entity: &EntityType) -> f64 {
     }
 }
 
-pub fn rotated_entities(mut entities: Vec<EntityType>, quarter_turns: u8) -> Vec<EntityType> {
+pub fn transformed_entities(
+    mut entities: Vec<EntityType>,
+    quarter_turns: u8,
+    scale: f64,
+    offset_x: f64,
+    offset_y: f64,
+) -> Vec<EntityType> {
     let Some((min, max)) = entity_bounds(&entities) else {
         return entities;
     };
-    rotate_entities_around(&mut entities, min, max, quarter_turns);
+    transform_entities_around(
+        &mut entities,
+        min,
+        max,
+        quarter_turns,
+        scale,
+        offset_x,
+        offset_y,
+    );
     entities
 }
 
-fn rotate_entities_around(
+fn transform_entities_around(
     entities: &mut [EntityType],
     min: Vector2,
     max: Vector2,
     quarter_turns: u8,
+    scale: f64,
+    offset_x: f64,
+    offset_y: f64,
 ) {
     let center = Vector2::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5);
     for entity in entities {
         match entity {
             EntityType::Line(line) => {
-                rotate_xy(&mut line.start.x, &mut line.start.y, center, quarter_turns);
-                rotate_xy(&mut line.end.x, &mut line.end.y, center, quarter_turns);
+                transform_xy(
+                    &mut line.start.x,
+                    &mut line.start.y,
+                    center,
+                    quarter_turns,
+                    scale,
+                    offset_x,
+                    offset_y,
+                );
+                transform_xy(
+                    &mut line.end.x,
+                    &mut line.end.y,
+                    center,
+                    quarter_turns,
+                    scale,
+                    offset_x,
+                    offset_y,
+                );
             }
             EntityType::LwPolyline(polyline) => {
                 for vertex in &mut polyline.vertices {
-                    rotate_xy(
+                    transform_xy(
                         &mut vertex.location.x,
                         &mut vertex.location.y,
                         center,
                         quarter_turns,
+                        scale,
+                        offset_x,
+                        offset_y,
                     );
                 }
             }
@@ -359,14 +409,22 @@ fn rotate_entities_around(
     }
 }
 
-fn rotate_xy(x: &mut f64, y: &mut f64, center: Vector2, quarter_turns: u8) {
-    let dx = *x - center.x;
-    let dy = *y - center.y;
+fn transform_xy(
+    x: &mut f64,
+    y: &mut f64,
+    center: Vector2,
+    quarter_turns: u8,
+    scale: f64,
+    offset_x: f64,
+    offset_y: f64,
+) {
+    let dx = (*x - center.x) * scale;
+    let dy = (*y - center.y) * scale;
     (*x, *y) = match quarter_turns % 4 {
-        1 => (center.x + dy, center.y - dx),
-        2 => (center.x - dx, center.y - dy),
-        3 => (center.x - dy, center.y + dx),
-        _ => (*x, *y),
+        1 => (center.x + dy + offset_x, center.y - dx + offset_y),
+        2 => (center.x - dx + offset_x, center.y - dy + offset_y),
+        3 => (center.x - dy + offset_x, center.y + dx + offset_y),
+        _ => (center.x + dx + offset_x, center.y + dy + offset_y),
     };
 }
 
@@ -787,7 +845,7 @@ mod tests {
             Vector3::new(0.0, 0.0, 0.0),
             Vector3::new(20.0, 10.0, 0.0),
         ))];
-        let rotated = rotated_entities(entities, 1);
+        let rotated = transformed_entities(entities, 1, 1.0, 0.0, 0.0);
         let EntityType::Line(line) = &rotated[0] else {
             panic!("expected line");
         };
@@ -806,9 +864,23 @@ mod tests {
                 ))
             })
             .collect();
-        let preview = preview_entities(&entities, 1);
+        let preview = preview_entities(&entities, 1, 1.0, 0.0, 0.0);
         assert!(preview.len() <= PREVIEW_ENTITY_LIMIT);
         assert!(preview.len() >= 200);
+    }
+
+    #[test]
+    fn scale_and_translation_are_applied_around_the_drawing_center() {
+        let entities = vec![EntityType::Line(Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(20.0, 10.0, 0.0),
+        ))];
+        let transformed = transformed_entities(entities, 0, 2.0, 5.0, -3.0);
+        let EntityType::Line(line) = &transformed[0] else {
+            panic!("expected line");
+        };
+        assert_eq!(line.start, Vector3::new(-5.0, -8.0, 0.0));
+        assert_eq!(line.end, Vector3::new(35.0, 12.0, 0.0));
     }
 
     #[test]

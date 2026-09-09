@@ -7,6 +7,10 @@ Open CAD Studio como entidades `LINE` y `LWPOLYLINE` editables.
 
 - vista previa ligera integrada en el dibujo antes de insertar;
 - rotación de la vista previa en pasos de 90° a izquierda o derecha;
+- movimiento de la vista previa en pasos de 10 mm y desplazamiento exacto por
+  comando;
+- escala uniforme reversible en pasos del 10 %, restablecimiento a 100 % y
+  factor exacto por comando;
 - confirmación o cancelación sin dejar geometría temporal;
 - escala física correcta: 72 puntos PDF = 25,4 mm;
 - líneas, polilíneas, rectángulos y contornos cerrados;
@@ -55,9 +59,15 @@ verifica el compilador exacto y crea el ZIP instalable dentro de `dist`.
 4. Abra un dibujo nuevo o existente y use **PDF a CAD > Vista previa**.
 5. Pulse **Ajustar vista** si el plano no cabe en pantalla y use **Girar
    izquierda** o **Girar derecha** hasta obtener la orientación deseada.
-6. Pulse **Insertar plano** para confirmar, o **Cancelar** para retirar la vista
+6. Use los botones de **Posición** para desplazarlo y los de **Escala** para
+   cambiar su tamaño antes de insertarlo.
+7. Pulse **Insertar plano** para confirmar, o **Cancelar** para retirar la vista
    previa.
-7. Guarde el dibujo como DXF o DWG desde Open CAD Studio.
+8. Guarde el dibujo como DXF o DWG desde Open CAD Studio.
+
+Para un ajuste numérico, escriba `PDFCAD_MOVE X,Y` para desplazar la vista
+previa esa cantidad adicional en milímetros, o `PDFCAD_SCALE factor` para fijar
+la escala (`0.5` = 50 %, `2` = 200 %).
 
 La vista previa muestra una muestra representativa limitada a 240 entidades,
 para que incluso los planos muy densos puedan rotarse con fluidez. Al confirmar

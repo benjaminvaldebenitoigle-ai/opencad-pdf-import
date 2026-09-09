@@ -74,6 +74,64 @@ impl CadModule for PdfCadModule {
                     ],
                 },
                 RibbonGroup {
+                    title: "Posicion (10 mm)",
+                    tools: vec![
+                        RibbonItem::LargeTool(ToolDef {
+                            id: "PDFCAD_MOVE_LEFT",
+                            label: "Izquierda",
+                            icon: IconKind::Glyph("←"),
+                            event: ModuleEvent::Command("PDFCAD_MOVE_LEFT".to_string()),
+                        }),
+                        RibbonItem::LargeTool(ToolDef {
+                            id: "PDFCAD_MOVE_RIGHT",
+                            label: "Derecha",
+                            icon: IconKind::Glyph("→"),
+                            event: ModuleEvent::Command("PDFCAD_MOVE_RIGHT".to_string()),
+                        }),
+                        RibbonItem::LargeTool(ToolDef {
+                            id: "PDFCAD_MOVE_UP",
+                            label: "Arriba",
+                            icon: IconKind::Glyph("↑"),
+                            event: ModuleEvent::Command("PDFCAD_MOVE_UP".to_string()),
+                        }),
+                        RibbonItem::LargeTool(ToolDef {
+                            id: "PDFCAD_MOVE_DOWN",
+                            label: "Abajo",
+                            icon: IconKind::Glyph("↓"),
+                            event: ModuleEvent::Command("PDFCAD_MOVE_DOWN".to_string()),
+                        }),
+                        RibbonItem::LargeTool(ToolDef {
+                            id: "PDFCAD_CENTER",
+                            label: "Posicion original",
+                            icon: IconKind::Glyph("⊙"),
+                            event: ModuleEvent::Command("PDFCAD_CENTER".to_string()),
+                        }),
+                    ],
+                },
+                RibbonGroup {
+                    title: "Escala",
+                    tools: vec![
+                        RibbonItem::LargeTool(ToolDef {
+                            id: "PDFCAD_SCALE_DOWN",
+                            label: "Reducir 10%",
+                            icon: IconKind::Glyph("−"),
+                            event: ModuleEvent::Command("PDFCAD_SCALE_DOWN".to_string()),
+                        }),
+                        RibbonItem::LargeTool(ToolDef {
+                            id: "PDFCAD_SCALE_UP",
+                            label: "Aumentar 10%",
+                            icon: IconKind::Glyph("+"),
+                            event: ModuleEvent::Command("PDFCAD_SCALE_UP".to_string()),
+                        }),
+                        RibbonItem::LargeTool(ToolDef {
+                            id: "PDFCAD_SCALE_RESET",
+                            label: "Escala 100%",
+                            icon: IconKind::Glyph("1:1"),
+                            event: ModuleEvent::Command("PDFCAD_SCALE_RESET".to_string()),
+                        }),
+                    ],
+                },
+                RibbonGroup {
                     title: "Insertar",
                     tools: vec![
                         RibbonItem::LargeTool(ToolDef {
@@ -101,6 +159,9 @@ struct PendingImport {
     result: pdf_import::ImportResult,
     path: PathBuf,
     quarter_turns: u8,
+    scale: f64,
+    offset_x: f64,
+    offset_y: f64,
     preview_handles: Vec<Handle>,
     tab_id: u64,
 }
@@ -130,6 +191,16 @@ impl BuiltinPlugin for PdfCadPlugin {
             "PDFCAD_IMPORT" => import_preview(host, argument),
             "PDFCAD_ROTATE_LEFT" => rotate_preview(host, 3),
             "PDFCAD_ROTATE_RIGHT" => rotate_preview(host, 1),
+            "PDFCAD_MOVE_LEFT" => move_preview(host, -10.0, 0.0),
+            "PDFCAD_MOVE_RIGHT" => move_preview(host, 10.0, 0.0),
+            "PDFCAD_MOVE_UP" => move_preview(host, 0.0, 10.0),
+            "PDFCAD_MOVE_DOWN" => move_preview(host, 0.0, -10.0),
+            "PDFCAD_CENTER" => center_preview(host),
+            "PDFCAD_SCALE_DOWN" => scale_preview(host, 1.0 / 1.1),
+            "PDFCAD_SCALE_UP" => scale_preview(host, 1.1),
+            "PDFCAD_SCALE_RESET" => reset_scale(host),
+            "PDFCAD_MOVE" => move_preview_exact(host, argument),
+            "PDFCAD_SCALE" => scale_preview_exact(host, argument),
             "PDFCAD_CONFIRM" => confirm_import(host),
             "PDFCAD_CANCEL" => cancel_preview(host),
             _ => return false,
@@ -167,7 +238,7 @@ fn import_preview(host: &mut dyn HostApi, argument: &str) {
                 remove_preview(host, &mut previous.preview_handles);
             }
 
-            let preview = pdf_import::preview_entities(&result.entities, 0);
+            let preview = pdf_import::preview_entities(&result.entities, 0, 1.0, 0.0, 0.0);
             let preview_handles = host.add_entities(preview);
             host.bump_geometry();
             let entity_count = result.entities.len();
@@ -189,6 +260,9 @@ fn import_preview(host: &mut dyn HostApi, argument: &str) {
                 result,
                 path: path.to_path_buf(),
                 quarter_turns: 0,
+                scale: 1.0,
+                offset_x: 0.0,
+                offset_y: 0.0,
                 preview_handles,
                 tab_id: host.tab_id(),
             });
@@ -212,17 +286,117 @@ fn rotate_preview(host: &mut dyn HostApi, delta: u8) {
         host.push_error("La vista previa pertenece a otro dibujo.");
         return;
     }
-    remove_preview(host, &mut item.preview_handles);
     item.quarter_turns = (item.quarter_turns + delta) % 4;
-    item.preview_handles = host.add_entities(pdf_import::preview_entities(
-        &item.result.entities,
-        item.quarter_turns,
-    ));
-    host.bump_geometry();
+    refresh_preview(host, item);
     host.push_output(&format!(
         "Vista previa girada a {}°.",
         item.quarter_turns as u16 * 90
     ));
+}
+
+fn move_preview(host: &mut dyn HostApi, dx: f64, dy: f64) {
+    with_pending_preview(host, |host, item| {
+        item.offset_x += dx;
+        item.offset_y += dy;
+        refresh_preview(host, item);
+        host.push_output(&format!(
+            "Vista previa desplazada: X {:+.2} mm, Y {:+.2} mm.",
+            item.offset_x, item.offset_y
+        ));
+    });
+}
+
+fn center_preview(host: &mut dyn HostApi) {
+    with_pending_preview(host, |host, item| {
+        item.offset_x = 0.0;
+        item.offset_y = 0.0;
+        refresh_preview(host, item);
+        host.push_output("La vista previa volvio a su posicion original.");
+    });
+}
+
+fn scale_preview(host: &mut dyn HostApi, factor: f64) {
+    with_pending_preview(host, |host, item| {
+        item.scale = (item.scale * factor).clamp(0.01, 100.0);
+        refresh_preview(host, item);
+        host.push_output(&format!(
+            "Escala de vista previa: {:.2}%.",
+            item.scale * 100.0
+        ));
+    });
+}
+
+fn reset_scale(host: &mut dyn HostApi) {
+    with_pending_preview(host, |host, item| {
+        item.scale = 1.0;
+        refresh_preview(host, item);
+        host.push_output("Escala de vista previa restablecida a 100%.");
+    });
+}
+
+fn move_preview_exact(host: &mut dyn HostApi, argument: &str) {
+    let Some((x, y)) = argument.split_once(',') else {
+        host.push_error("Use PDFCAD_MOVE X,Y; las unidades son milimetros.");
+        return;
+    };
+    let (Ok(x), Ok(y)) = (x.trim().parse::<f64>(), y.trim().parse::<f64>()) else {
+        host.push_error("El desplazamiento debe contener dos numeros: PDFCAD_MOVE X,Y.");
+        return;
+    };
+    if !x.is_finite() || !y.is_finite() {
+        host.push_error("El desplazamiento debe contener valores finitos.");
+        return;
+    }
+    move_preview(host, x, y);
+}
+
+fn scale_preview_exact(host: &mut dyn HostApi, argument: &str) {
+    let Ok(scale) = argument.trim().parse::<f64>() else {
+        host.push_error("Use PDFCAD_SCALE factor; por ejemplo, PDFCAD_SCALE 0.5.");
+        return;
+    };
+    if !scale.is_finite() || !(0.01..=100.0).contains(&scale) {
+        host.push_error("El factor de escala debe estar entre 0.01 y 100.");
+        return;
+    }
+    with_pending_preview(host, |host, item| {
+        item.scale = scale;
+        refresh_preview(host, item);
+        host.push_output(&format!(
+            "Escala de vista previa: {:.2}%.",
+            item.scale * 100.0
+        ));
+    });
+}
+
+fn with_pending_preview(
+    host: &mut dyn HostApi,
+    action: impl FnOnce(&mut dyn HostApi, &mut PendingImport),
+) {
+    let mut guard = pending()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(item) = guard.as_mut() else {
+        host.push_error("Primero pulse Vista previa y seleccione un PDF.");
+        return;
+    };
+    if item.tab_id != host.tab_id() {
+        host.push_error("La vista previa pertenece a otro dibujo.");
+        return;
+    }
+    action(host, item);
+}
+
+fn refresh_preview(host: &mut dyn HostApi, item: &mut PendingImport) {
+    remove_preview(host, &mut item.preview_handles);
+    item.preview_handles = host.add_entities(pdf_import::preview_entities(
+        &item.result.entities,
+        item.quarter_turns,
+        item.scale,
+        item.offset_x,
+        item.offset_y,
+    ));
+    host.bump_geometry();
 }
 
 fn confirm_import(host: &mut dyn HostApi) {
@@ -245,13 +419,22 @@ fn confirm_import(host: &mut dyn HostApi) {
     let entity_count = item.result.entities.len();
     let pages = item.result.pages;
     let vertices = item.result.vertices;
-    let entities = pdf_import::rotated_entities(item.result.entities, item.quarter_turns);
+    let entities = pdf_import::transformed_entities(
+        item.result.entities,
+        item.quarter_turns,
+        item.scale,
+        item.offset_x,
+        item.offset_y,
+    );
     host.add_entities(entities);
     host.bump_geometry();
     host.set_dirty();
     host.push_output(&format!(
-        "PDF insertado: {entity_count} entidades, {vertices} vertices, {pages} pagina(s), giro {}°. Archivo: {}. Escala: 1 punto PDF = {:.6} mm.",
+        "PDF insertado: {entity_count} entidades, {vertices} vertices, {pages} pagina(s), giro {}°, escala {:.2}%, desplazamiento X {:+.2} mm / Y {:+.2} mm. Archivo: {}. Escala base: 1 punto PDF = {:.6} mm.",
         item.quarter_turns as u16 * 90,
+        item.scale * 100.0,
+        item.offset_x,
+        item.offset_y,
         item.path.display(),
         pdf_import::POINT_TO_MM
     ));
