@@ -13,8 +13,8 @@ Open CAD Studio como entidades `LINE` y `LWPOLYLINE` editables.
 - curvas Bézier aproximadas con 12 segmentos;
 - formularios PDF vectoriales (`Form XObject`) y documentos de varias páginas;
 - una única operación de deshacer para toda la importación;
-- optimización geométrica conservadora: elimina duplicados exactos, une
-  trazados por extremos idénticos y usa entidades `LINE` para segmentos simples;
+- importación fiel: conserva separados incluso los trazados coincidentes y no
+  elimina ni combina vértices; usa `LINE` para cada trazado simple de dos puntos;
 - diagnóstico para PDF cifrado o sin geometría vectorial.
 
 Las páginas se colocan de izquierda a derecha con 10 mm de separación. El texto
@@ -61,8 +61,13 @@ verifica el compilador exacto y crea el ZIP instalable dentro de `dist`.
 
 La vista previa muestra una muestra representativa limitada a 240 entidades,
 para que incluso los planos muy densos puedan rotarse con fluidez. Al confirmar
-se inserta la geometría vectorial completa optimizada, sin reducir la precisión
-de sus coordenadas.
+se inserta la geometría vectorial completa sin eliminar ni fusionar trazados.
+
+Open CAD Studio 2026.36 puede representar símbolos repetidos eficientemente
+como bloques, pero su API 5 para complementos todavía no permite crear las
+definiciones de esos bloques. Por seguridad, este complemento no reemplaza un
+patrón repetido hasta que el anfitrión pueda recibir su definición y sus
+inserciones de forma atómica.
 
 ## Pruebas
 

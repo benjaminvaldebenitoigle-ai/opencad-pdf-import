@@ -1,4 +1,3 @@
-use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use lopdf::{content::Content, Dictionary, Document, Object, Stream};
@@ -227,7 +226,7 @@ pub fn read_pdf(path: &Path) -> Result<ImportResult, String> {
         state.paint(false);
 
         source_paths += state.painted_paths.len();
-        let page_entities = paths_to_entities(optimize_paths(state.painted_paths));
+        let page_entities = paths_to_entities(state.painted_paths);
         vertices += page_entities.iter().map(entity_vertex_count).sum::<usize>();
 
         let page_width = page_width_points(&document, *page_id).unwrap_or(612.0) * POINT_TO_MM;
@@ -245,143 +244,6 @@ pub fn read_pdf(path: &Path) -> Result<ImportResult, String> {
         text_operators,
         image_operators,
     })
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct PointKey(u64, u64);
-
-impl From<Point> for PointKey {
-    fn from(point: Point) -> Self {
-        fn canonical_bits(value: f64) -> u64 {
-            if value == 0.0 {
-                0
-            } else {
-                value.to_bits()
-            }
-        }
-        Self(canonical_bits(point.x), canonical_bits(point.y))
-    }
-}
-
-fn optimize_paths(paths: Vec<Subpath>) -> Vec<Subpath> {
-    let mut unique_segments = HashSet::new();
-    let mut closed = Vec::new();
-    let mut open = Vec::new();
-
-    for mut path in paths {
-        path.points
-            .dedup_by(|left, right| PointKey::from(*left) == PointKey::from(*right));
-        if path.closed
-            && path.points.len() > 2
-            && PointKey::from(path.points[0]) == PointKey::from(*path.points.last().unwrap())
-        {
-            path.points.pop();
-        }
-        if path.points.len() < 2
-            || path
-                .points
-                .iter()
-                .any(|p| !p.x.is_finite() || !p.y.is_finite())
-        {
-            continue;
-        }
-        if path.closed {
-            closed.push(path);
-            continue;
-        }
-        if PointKey::from(path.points[0]) == PointKey::from(*path.points.last().unwrap()) {
-            path.points.pop();
-            path.closed = path.points.len() > 2;
-            if path.closed {
-                closed.push(path);
-            }
-            continue;
-        }
-        if path.points.len() == 2 {
-            let a = PointKey::from(path.points[0]);
-            let b = PointKey::from(path.points[1]);
-            let key = if a <= b { (a, b) } else { (b, a) };
-            if !unique_segments.insert(key) {
-                continue;
-            }
-        }
-        open.push(path);
-    }
-
-    let mut adjacency = HashMap::<PointKey, Vec<usize>>::new();
-    for (index, path) in open.iter().enumerate() {
-        adjacency
-            .entry(PointKey::from(path.points[0]))
-            .or_default()
-            .push(index);
-        adjacency
-            .entry(PointKey::from(*path.points.last().unwrap()))
-            .or_default()
-            .push(index);
-    }
-
-    let mut slots: Vec<Option<Subpath>> = open.into_iter().map(Some).collect();
-    let mut joined = Vec::new();
-    for index in 0..slots.len() {
-        let Some(path) = slots[index].as_ref() else {
-            continue;
-        };
-        let start_degree = adjacency
-            .get(&PointKey::from(path.points[0]))
-            .map_or(0, Vec::len);
-        let end_degree = adjacency
-            .get(&PointKey::from(*path.points.last().unwrap()))
-            .map_or(0, Vec::len);
-        if start_degree != 2 || end_degree != 2 {
-            let reverse = start_degree == 2 && end_degree != 2;
-            joined.push(build_chain(index, reverse, &mut slots, &adjacency));
-        }
-    }
-    for index in 0..slots.len() {
-        if slots[index].is_some() {
-            joined.push(build_chain(index, false, &mut slots, &adjacency));
-        }
-    }
-    closed.extend(joined);
-    closed
-}
-
-fn build_chain(
-    index: usize,
-    reverse: bool,
-    paths: &mut [Option<Subpath>],
-    adjacency: &HashMap<PointKey, Vec<usize>>,
-) -> Subpath {
-    let mut path = paths[index].take().unwrap();
-    if reverse {
-        path.points.reverse();
-    }
-    let first = PointKey::from(path.points[0]);
-
-    loop {
-        let end = PointKey::from(*path.points.last().unwrap());
-        if end == first && path.points.len() > 2 {
-            path.points.pop();
-            path.closed = true;
-            break;
-        }
-        let Some(neighbours) = adjacency.get(&end).filter(|items| items.len() == 2) else {
-            break;
-        };
-        let Some(next_index) = neighbours.iter().copied().find(|i| paths[*i].is_some()) else {
-            break;
-        };
-        let mut next = paths[next_index].take().unwrap();
-        if PointKey::from(next.points[0]) != end {
-            next.points.reverse();
-        }
-        if PointKey::from(next.points[0]) != end {
-            paths[next_index] = Some(next);
-            break;
-        }
-        path.points.extend(next.points.into_iter().skip(1));
-    }
-    path
 }
 
 fn paths_to_entities(paths: Vec<Subpath>) -> Vec<EntityType> {
@@ -779,7 +641,7 @@ mod tests {
         let mut state = PageState::new(0.0);
         state.rectangle(0.0, 0.0, 10.0, 20.0);
         state.paint(false);
-        let entities = paths_to_entities(optimize_paths(state.painted_paths));
+        let entities = paths_to_entities(state.painted_paths);
         assert_eq!(entities.len(), 1);
         match &entities[0] {
             EntityType::LwPolyline(polyline) => {
@@ -885,7 +747,7 @@ mod tests {
         process_operations(&document, &page_content, &[&resources], &mut state, 0)
             .expect("process form");
 
-        let entities = paths_to_entities(optimize_paths(state.painted_paths));
+        let entities = paths_to_entities(state.painted_paths);
         assert_eq!(entities.len(), 1);
         match &entities[0] {
             EntityType::Line(line) => {
@@ -897,7 +759,7 @@ mod tests {
     }
 
     #[test]
-    fn joins_exactly_connected_paths_without_changing_points() {
+    fn preserves_coincident_and_connected_paths_as_distinct_geometry() {
         let paths = vec![
             Subpath {
                 points: vec![Point { x: 0.0, y: 0.0 }, Point { x: 1.0, y: 0.0 }],
@@ -907,17 +769,16 @@ mod tests {
                 points: vec![Point { x: 2.0, y: 0.0 }, Point { x: 1.0, y: 0.0 }],
                 closed: false,
             },
+            Subpath {
+                points: vec![Point { x: 0.0, y: 0.0 }, Point { x: 1.0, y: 0.0 }],
+                closed: false,
+            },
         ];
-        let optimized = optimize_paths(paths);
-        assert_eq!(optimized.len(), 1);
-        assert_eq!(
-            optimized[0].points,
-            vec![
-                Point { x: 0.0, y: 0.0 },
-                Point { x: 1.0, y: 0.0 },
-                Point { x: 2.0, y: 0.0 }
-            ]
-        );
+        let entities = paths_to_entities(paths);
+        assert_eq!(entities.len(), 3);
+        assert!(entities
+            .iter()
+            .all(|entity| matches!(entity, EntityType::Line(_))));
     }
 
     #[test]

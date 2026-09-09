@@ -193,7 +193,7 @@ fn import_preview(host: &mut dyn HostApi, argument: &str) {
                 tab_id: host.tab_id(),
             });
             host.push_output(&format!(
-                    "Vista previa lista: {pages} pagina(s), {vertices} vertices, {source_paths} trazados optimizados a {entity_count} entidades. Gire si es necesario y pulse Insertar plano."
+                    "Vista previa lista: {pages} pagina(s), {vertices} vertices y {entity_count} entidades para {source_paths} trazados. No se elimina ni combina geometria. Gire si es necesario y pulse Insertar plano."
                 ));
         }
         Err(error) => host.push_error(&format!("No se pudo importar el PDF: {error}")),

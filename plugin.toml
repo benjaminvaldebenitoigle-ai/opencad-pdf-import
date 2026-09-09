@@ -1,7 +1,7 @@
 [plugin]
 id = "opencad.pdf_import"
 name = "PDF a CAD"
-version = "0.2.0"
+version = "0.2.1"
 description = "Importa geometria vectorial de un PDF al dibujo CAD activo"
 author = "Open CAD Studio community plugin"
 license = "GPL-3.0-only"
